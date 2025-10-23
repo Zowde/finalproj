@@ -1,0 +1,18 @@
+# Ignore compiled files
+*.o
+*.out
+*.exe
+
+# Ignore backup and temporary files
+*~
+*.swp
+
+# Ignore build directories (if you use one)
+build/
+bin/
+
+# Ignore VS Code settings (optional)
+.vscode/
+
+# Ignore log files
+*.log
