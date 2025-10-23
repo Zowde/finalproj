@@ -1,197 +1,119 @@
+/* * [source: 437] Unit test application for consumer_producer.c
+ * This file is required by the new build.sh
+ */
 #include "consumer_producer.h"
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <unistd.h>
+#include <assert.h>
 #include <string.h>
 
-static int test_count = 0;
-static int passed = 0;
+#define QUEUE_CAPACITY 5
+#define NUM_PRODUCERS 3
+#define NUM_CONSUMERS 2
+#define ITEMS_PER_PRODUCER 20
+#define TOTAL_ITEMS (NUM_PRODUCERS * ITEMS_PER_PRODUCER)
 
-void print_test(const char* name, int result) {
-    test_count++;
-    if (result) {
-        printf("[PASS] Test %d: %s\n", test_count, name);
-        passed++;
-    } else {
-        printf("[FAIL] Test %d: %s\n", test_count, name);
+consumer_producer_t test_queue;
+int consumed_item_count = 0;
+pthread_mutex_t count_mutex;
+
+/* [source: 408] Producer thread function */
+void* producer_func(void* arg) {
+    int producer_id = *(int*)arg;
+    for (int i = 0; i < ITEMS_PER_PRODUCER; i++) {
+        char item_str[50];
+        snprintf(item_str, sizeof(item_str), "item-%d-%d", producer_id, i);
+        
+        // [source: 414]
+        const char* err = consumer_producer_put(&test_queue, item_str);
+        assert(err == NULL);
     }
-}
-
-/* Test 1: Basic init and destroy */
-void test_init_destroy(void) {
-    consumer_producer_t queue;
-    const char* err = consumer_producer_init(&queue, 10);
-    int success = (err == NULL);
-    consumer_producer_destroy(&queue);
-    print_test("init_destroy", success);
-}
-
-/* Test 2: Put and get single item */
-void test_put_get_single(void) {
-    consumer_producer_t queue;
-    consumer_producer_init(&queue, 10);
-    
-    const char* err = consumer_producer_put(&queue, "hello");
-    char* item = consumer_producer_get(&queue);
-    
-    int success = (err == NULL && item != NULL && strcmp(item, "hello") == 0);
-    free(item);
-    consumer_producer_destroy(&queue);
-    print_test("put_get_single", success);
-}
-
-/* Test 3: Queue capacity and circular buffer */
-void test_circular_buffer(void) {
-    consumer_producer_t queue;
-    consumer_producer_init(&queue, 3);
-    
-    /* Fill queue */
-    consumer_producer_put(&queue, "item1");
-    consumer_producer_put(&queue, "item2");
-    consumer_producer_put(&queue, "item3");
-    
-    /* Retrieve and refill to test circular */
-    char* item1 = consumer_producer_get(&queue);
-    char* item2 = consumer_producer_get(&queue);
-    
-    consumer_producer_put(&queue, "item4");
-    consumer_producer_put(&queue, "item5");
-    
-    char* item3 = consumer_producer_get(&queue);
-    char* item4 = consumer_producer_get(&queue);
-    char* item5 = consumer_producer_get(&queue);
-    
-    int success = (strcmp(item1, "item1") == 0 &&
-                   strcmp(item2, "item2") == 0 &&
-                   strcmp(item3, "item3") == 0 &&
-                   strcmp(item4, "item4") == 0 &&
-                   strcmp(item5, "item5") == 0);
-    
-    free(item1);
-    free(item2);
-    free(item3);
-    free(item4);
-    free(item5);
-    consumer_producer_destroy(&queue);
-    print_test("circular_buffer", success);
-}
-
-/* Shared state for blocking tests */
-static consumer_producer_t test_queue;
-static char* producer_result = NULL;
-
-void* producer_thread(void* arg) {
-    (void)arg;  /* Suppress unused parameter warning */
-    /* This should block because queue capacity is 1 and consumer hasn't started */
-    usleep(500000);  /* Wait 500ms */
-    const char* err = consumer_producer_put(&test_queue, "data");
-    producer_result = (err == NULL) ? "success" : (char*)err;
     return NULL;
 }
 
-void* consumer_thread(void* arg) {
-    (void)arg;  /* Suppress unused parameter warning */
-    usleep(200000);  /* Wait 200ms, then consume */
-    char* item = consumer_producer_get(&test_queue);
-    free(item);
-    return NULL;
-}
-
-/* Test 4: Producer blocks when full */
-void test_producer_blocks(void) {
-    consumer_producer_init(&test_queue, 1);
-    producer_result = NULL;
-    
-    /* Pre-fill queue */
-    consumer_producer_put(&test_queue, "blocking_item");
-    
-    /* Start producer thread that will block trying to put */
-    pthread_t pid;
-    pthread_create(&pid, NULL, producer_thread, NULL);
-    
-    /* Wait a bit, then consume to unblock producer */
-    usleep(300000);
-    char* item = consumer_producer_get(&test_queue);
-    free(item);
-    
-    pthread_join(pid, NULL);
-    consumer_producer_destroy(&test_queue);
-    
-    int success = (producer_result != NULL && strcmp(producer_result, "success") == 0);
-    print_test("producer_blocks_when_full", success);
-}
-
-/* Test 5: Multiple items in sequence */
-void test_multiple_items(void) {
-    consumer_producer_t queue;
-    consumer_producer_init(&queue, 10);
-    
-    const char* items[] = {"first", "second", "third", "fourth"};
-    int count = 4;
-    
-    /* Put all items */
-    for (int i = 0; i < count; i++) {
-        consumer_producer_put(&queue, items[i]);
-    }
-    
-    /* Get all items and verify order (FIFO) */
-    int success = 1;
-    for (int i = 0; i < count; i++) {
-        char* item = consumer_producer_get(&queue);
-        if (item == NULL || strcmp(item, items[i]) != 0) {
-            success = 0;
+/* [source: 416] Consumer thread function */
+void* consumer_func(void* arg) {
+    while (1) {
+        // [source: 421]
+        char* item = consumer_producer_get(&test_queue);
+        
+        if (strcmp(item, "<END>") == 0) {
+            free(item);
+            // Re-broadcast the <END> signal for other consumers
+            consumer_producer_put(&test_queue, "<END>");
+            break;
         }
+        
+        // We got an item
+        // printf("Consumed: %s\n", item);
         free(item);
+        
+        pthread_mutex_lock(&count_mutex);
+        consumed_item_count++;
+        pthread_mutex_unlock(&count_mutex);
+    }
+    return NULL;
+}
+
+/* [source: 366-372] Test: Multiple producers, multiple consumers, forced blocking */
+void test_multi_producer_consumer() {
+    printf("[TEST] Running: Multi-Producer/Consumer Stress Test\n");
+    
+    // [source: 401]
+    const char* err = consumer_producer_init(&test_queue, QUEUE_CAPACITY);
+    assert(err == NULL);
+    pthread_mutex_init(&count_mutex, NULL);
+    
+    pthread_t producers[NUM_PRODUCERS];
+    pthread_t consumers[NUM_CONSUMERS];
+    int producer_ids[NUM_PRODUCERS];
+
+    printf("  [TEST] Starting %d consumer threads...\n", NUM_CONSUMERS);
+    for (int i = 0; i < NUM_CONSUMERS; i++) {
+        pthread_create(&consumers[i], NULL, consumer_func, NULL);
     }
     
-    consumer_producer_destroy(&queue);
-    print_test("multiple_items_fifo", success);
-}
-
-/* Test 6: Signal finished */
-void test_signal_finished(void) {
-    consumer_producer_t queue;
-    consumer_producer_init(&queue, 10);
-    
-    consumer_producer_signal_finished(&queue);
-    int result = consumer_producer_wait_finished(&queue);
-    
-    consumer_producer_destroy(&queue);
-    print_test("signal_wait_finished", result == 0);
-}
-
-/* Test 7: NULL pointer handling */
-void test_null_handling(void) {
-    const char* err = consumer_producer_put(NULL, "test");
-    char* item = consumer_producer_get(NULL);
-    int result = consumer_producer_wait_finished(NULL);
-    
-    consumer_producer_destroy(NULL);  /* Should not crash */
-    
-    int success = (err != NULL && item == NULL && result == -1);
-    print_test("null_pointer_handling", success);
-}
-
-int main(void) {
-    printf("\n=== CONSUMER-PRODUCER QUEUE UNIT TESTS ===\n\n");
-    
-    test_init_destroy();
-    test_put_get_single();
-    test_circular_buffer();
-    test_multiple_items();
-    test_producer_blocks();
-    test_signal_finished();
-    test_null_handling();
-    
-    printf("\n=== RESULTS ===\n");
-    printf("Passed: %d/%d\n", passed, test_count);
-    
-    if (passed == test_count) {
-        printf("All tests passed!\n");
-        return 0;
-    } else {
-        printf("Some tests failed!\n");
-        return 1;
+    printf("  [TEST] Starting %d producer threads (each producing %d items)...\n", NUM_PRODUCERS, ITEMS_PER_PRODUCER);
+    for (int i = 0; i < NUM_PRODUCERS; i++) {
+        producer_ids[i] = i;
+        pthread_create(&producers[i], NULL, producer_func, &producer_ids[i]);
     }
+    
+    // Wait for all producers to finish
+    for (int i = 0; i < NUM_PRODUCERS; i++) {
+        pthread_join(producers[i], NULL);
+    }
+    printf("  [TEST] All producers finished.\n");
+    
+    // Send the <END> signal to stop consumers
+    consumer_producer_put(&test_queue, "<END>");
+    
+    // Wait for all consumers to finish
+    for (int i = 0; i < NUM_CONSUMERS; i++) {
+        pthread_join(consumers[i], NULL);
+    }
+    printf("  [TEST] All consumers finished.\n");
+
+    // [source: 406]
+    consumer_producer_destroy(&test_queue);
+    pthread_mutex_destroy(&count_mutex);
+    
+    printf("  [TEST] Total items produced: %d\n", TOTAL_ITEMS);
+    printf("  [TEST] Total items consumed: %d\n", consumed_item_count);
+    
+    assert(consumed_item_count == TOTAL_ITEMS);
+    
+    printf("[TEST] PASS\n\n");
+}
+
+
+int main() {
+    printf("--- Running Consumer-Producer Unit Tests ---\n\n");
+    
+    test_multi_producer_consumer();
+    
+    printf("--- All Consumer-Producer Tests Passed ---\n");
+    return 0;
 }

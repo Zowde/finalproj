@@ -1,33 +1,29 @@
+/* */
 #include "plugin_common.h"
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 /**
- * Uppercaser Plugin
- * Converts all alphabetic characters in the string to uppercase
+ * Transformation function for the uppercaser.
+ * Converts all alphabetic characters in the string to uppercase.
  */
-
 const char* plugin_transform(const char* input) {
-    if (input == NULL) {
-        return NULL;
+    char* new_str = strdup(input);
+    if (!new_str) {
+        return NULL; /* Common infrastructure will handle this */
     }
     
-    size_t len = strlen(input);
-    char* output = (char*)malloc(len + 1);
-    if (output == NULL) {
-        return NULL;
+    for (int i = 0; new_str[i]; i++) {
+        new_str[i] = toupper(new_str[i]); /* */
     }
     
-    for (size_t i = 0; i < len; i++) {
-        output[i] = (char)toupper((unsigned char)input[i]);
-    }
-    output[len] = '\0';
-    
-    return output;
+    return new_str;
 }
 
-__attribute__((visibility("default")))
-const char* plugin_init(int queue_size) {
-    return common_plugin_init(plugin_transform, "uppercaser", queue_size);
+/**
+ * Initialization function for the uppercaser plugin.
+ */
+const char* plugin_init(int queue_size) { /* */
+    return common_plugin_init(plugin_transform, "uppercaser", queue_size); /* */
 }

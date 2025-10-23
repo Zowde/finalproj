@@ -1,42 +1,33 @@
+/* */
 #include "plugin_common.h"
-#include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
-#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h> /* For usleep */
 
 /**
- * Typewriter Plugin
- * Simulates a typewriter effect by printing each character with a 100ms delay
- * Note: This can cause a "traffic jam" in the pipeline as processing is slower
+ * Transformation function for the typewriter.
+ * Simulates a typewriter effect with a 100ms delay per character.
  */
-
 const char* plugin_transform(const char* input) {
-    if (input == NULL) {
-        return NULL;
-    }
+    /* Format: [typewriter] LLEHO */
+    printf("[typewriter] ");
+    fflush(stdout); /* Ensure prefix prints before delay */
     
-    size_t len = strlen(input);
-    
-    /* Print each character with 100ms delay */
-    for (size_t i = 0; i < len; i++) {
-        printf("%c", input[i]);
+    for (size_t i = 0; input[i]; i++) {
+        putchar(input[i]);
         fflush(stdout);
-        usleep(100000);  /* 100ms = 100000 microseconds */
+        usleep(100000); /* 100ms delay */
     }
     printf("\n");
     fflush(stdout);
     
-    /* Return copy for next plugin */
-    char* output = (char*)malloc(len + 1);
-    if (output == NULL) {
-        return NULL;
-    }
-    strcpy(output, input);
-    
-    return output;
+    return strdup(input);
 }
 
-__attribute__((visibility("default")))
-const char* plugin_init(int queue_size) {
-    return common_plugin_init(plugin_transform, "typewriter", queue_size);
+/**
+ * Initialization function for the typewriter plugin.
+ */
+const char* plugin_init(int queue_size) { /* */
+    return common_plugin_init(plugin_transform, "typewriter", queue_size); /* */
 }

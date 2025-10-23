@@ -1,47 +1,33 @@
+/* */
 #include "plugin_common.h"
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 
 /**
- * Rotator Plugin
- * Moves every character in the string one position to the right
- * The last character wraps around to the front
- * Example: "hello" -> "ohell"
+ * Transformation function for the rotator.
+ * Moves every character one position to the right. Last char wraps to front.
  */
-
 const char* plugin_transform(const char* input) {
-    if (input == NULL) {
-        return NULL;
-    }
-    
     size_t len = strlen(input);
-    
-    if (len <= 1) {
-        char* output = (char*)malloc(len + 1);
-        if (output == NULL) {
-            return NULL;
-        }
-        strcpy(output, input);
-        return output;
+    if (len == 0) {
+        return strdup(input);
     }
     
-    char* output = (char*)malloc(len + 1);
-    if (output == NULL) {
+    char* new_str = malloc(len + 1);
+    if (!new_str) {
         return NULL;
     }
     
-    /* Last character goes to front */
-    output[0] = input[len - 1];
-    /* All others shift right */
-    for (size_t i = 1; i < len; i++) {
-        output[i] = input[i - 1];
-    }
-    output[len] = '\0';
+    new_str[0] = input[len - 1]; /* */
+    memcpy(new_str + 1, input, len - 1); /* */
+    new_str[len] = '\0';
     
-    return output;
+    return new_str;
 }
 
-__attribute__((visibility("default")))
-const char* plugin_init(int queue_size) {
-    return common_plugin_init(plugin_transform, "rotator", queue_size);
+/**
+ * Initialization function for the rotator plugin.
+ */
+const char* plugin_init(int queue_size) { /* */
+    return common_plugin_init(plugin_transform, "rotator", queue_size); /* */
 }

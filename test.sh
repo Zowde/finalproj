@@ -1,286 +1,228 @@
 #!/bin/bash
 
-# Colors for output
+# --- Colors for output ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Test counter
-TESTS_RUN=0
-TESTS_PASSED=0
-
-print_status() {
-    echo -e "${GREEN}[TEST]${NC} $1"
-}
-
+# --- Helper functions for printing ---
 print_pass() {
     echo -e "${GREEN}[PASS]${NC} $1"
-    ((TESTS_PASSED++))
 }
 
 print_fail() {
     echo -e "${RED}[FAIL]${NC} $1"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
-print_info() {
-    echo -e "${YELLOW}[INFO]${NC} $1"
+# --- Counters ---
+TEST_COUNT=0
+FAIL_COUNT=0
+
+# --- Test runner function ---
+# Usage: run_test "Test Name" "command_to_run" "expected_stdout" "expected_stderr"
+run_test() {
+    TEST_NAME="$1"
+    COMMAND="$2"
+    EXPECTED_STDOUT="$3"
+    EXPECTED_STDERR="$4"
+    
+    TEST_COUNT=$((TEST_COUNT + 1))
+    
+    # Execute command, capturing stdout and stderr
+    # Use eval to handle commands with pipes and redirects
+    OUTPUT=$(eval "$COMMAND" 2> stderr.log)
+    STDERR_OUTPUT=$(cat stderr.log)
+    
+    # Normalize expected output
+    EXPECTED_STDOUT=$(echo -e "$EXPECTED_STDOUT")
+    EXPECTED_STDERR=$(echo -e "$EXPECTED_STDERR")
+
+    PASSED=true
+    
+    # Check STDOUT
+    # We support two modes:
+    # 1. Exact match (default)
+    # 2. Contains match (if expected starts with "CONTAINS:")
+    if [[ "$EXPECTED_STDOUT" == "CONTAINS:"* ]]; then
+        # CONTAINS check
+        local expected_content=${EXPECTED_STDOUT#CONTAINS:}
+        if ! echo "$OUTPUT" | grep -qF "$expected_content"; then
+            print_fail "$TEST_NAME (STDOUT)"
+            echo "  Expected (to contain): $expected_content"
+            echo "  Got: $OUTPUT"
+            PASSED=false
+        fi
+    else
+        # EXACT match check
+        if [ "$OUTPUT" != "$EXPECTED_STDOUT" ]; then
+            print_fail "$TEST_NAME (STDOUT)"
+            echo -e "  Expected:\n$EXPECTED_STDOUT"
+            echo -e "  Got:\n$OUTPUT"
+            PASSED=false
+        fi
+    fi
+    
+    # Check STDERR (using grep for partial match)
+    if [ -n "$EXPECTED_STDERR" ]; then
+        if ! echo "$STDERR_OUTPUT" | grep -qF "$EXPECTED_STDERR"; then
+             print_fail "$TEST_NAME (STDERR)"
+             echo "  Expected (to contain): $EXPECTED_STDERR"
+             echo "  Got: $STDERR_OUTPUT"
+             PASSED=false
+        fi
+    elif [ -n "$STDERR_OUTPUT" ]; then
+         print_fail "$TEST_NAME (STDERR)"
+         echo "  Expected: (no stderr)"
+         echo "  Got: $STDERR_OUTPUT"
+         PASSED=false
+    fi
+    
+    if $PASSED; then
+        print_pass "$TEST_NAME"
+    fi
+    
+    rm -f stderr.log
 }
 
-# Exit immediately if any command fails
-#set -e
+# --- Main Test Script ---
 
-# --- Build Phase ---
-print_status "Building project..."
+# 1. Run the build script first
+echo "--- Running Build Script ---"
 ./build.sh
-print_pass "Project built successfully"
-
-# --- CRITICAL FIX: Set LD_LIBRARY_PATH ---
-print_info "Setting LD_LIBRARY_PATH to ./output for dynamic loading."
-export LD_LIBRARY_PATH=./output:$LD_LIBRARY_PATH
-
-# --- Final Executable Check (Sanity check) ---
-print_info "Verifying analyzer executable..."
-if [ ! -x ./output/analyzer ]; then
-    print_fail "Analyzer executable not found or not executable"
-    ls -l ./output/ 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo -e "${RED}[ERROR]${NC} Build failed. Aborting tests."
     exit 1
 fi
-
+echo "--- Build Successful ---"
 echo ""
-print_status "Starting test suite..."
+echo "--- Running Tests ---"
+
+# --- Argument Validation Tests ---
+# We no longer need the giant fragile string.
+# We will check that stdout "CONTAINS:" the word "Usage:"
+# and stderr "contains" the correct error message.
+
+run_test "Test 1: Arg Validation (No args)" \
+         "./output/analyzer" \
+         "CONTAINS:Usage:" \
+         "Error: Missing arguments."
+
+run_test "Test 2: Arg Validation (Too few)" \
+         "./output/analyzer 10" \
+         "CONTAINS:Usage:" \
+         "Error: Missing arguments."
+
+run_test "Test 3: Arg Validation (Invalid queue size)" \
+         "./output/analyzer 0 uppercaser" \
+         "CONTAINS:Usage:" \
+         "Error: queue_size must be a positive integer."
+
+run_test "Test 4: Plugin Loading (Invalid name)" \
+         "echo '<END>' | ./output/analyzer 10 invalidplugin" \
+         "CONTAINS:Usage:" \
+         "Error loading plugin output/invalidplugin.so"
+
+# --- Pipeline Logic Tests ---
+
+run_test "Test 5: Single Plugin (uppercaser)" \
+         "echo -e 'hello\n<END>' | ./output/analyzer 10 uppercaser" \
+         "Pipeline shutdown complete" \
+         ""
+
+run_test "Test 6: Two Plugins (uppercaser -> logger)" \
+         "echo -e 'hello\n<END>' | ./output/analyzer 10 uppercaser logger" \
+         "[logger] HELLO\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 7: Full Pipeline (PDF Example)" \
+         "echo -e 'hello\n<END>' | ./output/analyzer 20 uppercaser rotator logger flipper typewriter" \
+         "[logger] OHELL\n[typewriter] LLEHO\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 8: Rotator Logic (abc -> cab)" \
+         "echo -e 'abc\n<END>' | ./output/analyzer 10 rotator logger" \
+         "[logger] cab\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 9: Flipper Logic (world -> dlrow)" \
+         "echo -e 'world\n<END>' | ./output/analyzer 10 flipper logger" \
+         "[logger] dlrow\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 10: Expander Logic (hi -> h i)" \
+         "echo -e 'hi\n<END>' | ./output/analyzer 10 expander logger" \
+         "[logger] h i\nPipeline shutdown complete" \
+         ""
+
+# --- Edge Case Tests ---
+
+run_test "Test 11: Empty String Input" \
+         "echo -e '\n<END>' | ./output/analyzer 10 uppercaser rotator flipper expander logger" \
+         "[logger] \nPipeline shutdown complete" \
+         ""
+
+run_test "Test 12: Multiple Lines" \
+         "echo -e 'one\ntwo\n<END>' | ./output/analyzer 10 uppercaser logger" \
+         "[logger] ONE\n[logger] TWO\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 13: Chain with Typewriter (check traffic jam)" \
+         "echo -e 'fast\n<END>' | ./output/analyzer 10 typewriter logger" \
+         "[typewriter] fast\n[logger] fast\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 14: Re-using Plugin (rotator -> rotator)" \
+         "echo -e 'abc\n<END>' | ./output/analyzer 10 rotator rotator logger" \
+         "[logger] bca\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 15: Concurrency (Small Queue Size)" \
+         "echo -e 'one\ntwo\nthree\n<END>' | ./output/analyzer 1 uppercaser logger" \
+         "[logger] ONE\n[logger] TWO\n[logger] THREE\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 16: No Input (Immediate EOF)" \
+         "cat /dev/null | ./output/analyzer 10 logger" \
+         "Pipeline shutdown complete" \
+         ""
+
+run_test "Test 17: <END> Only" \
+         "echo '<END>' | ./output/analyzer 10 logger" \
+         "Pipeline shutdown complete" \
+         ""
+
+# Generate a 1024-char string (a...a)
+LONG_STRING=$(printf 'a%.0s' {1..1024})
+run_test "Test 18: Max Length String (1024 chars)" \
+         "echo -e '${LONG_STRING}\n<END>' | ./output/analyzer 10 expander" \
+         "Pipeline shutdown complete" \
+         ""
+
+# Generate a 1025-char string (b...b)
+# fgets will read this as 'b...b' (1024) and 'b' (1)
+OVER_STRING=$(printf 'b%.0s' {1..1025})
+EXPECTED_OVER_LOG="[logger] B...B (1024)\n[logger] B (1)"
+# Create the expected output strings
+EXPECTED_B_1024=$(printf 'B%.0s' {1..1CSS_STRING})
+run_test "Test 19: Oversized String (1025 chars)" \
+         "echo -e '${OVER_STRING}\n<END>' | ./output/analyzer 10 uppercaser logger" \
+         "[logger] ${EXPECTED_B_1024}\n[logger] B\nPipeline shutdown complete" \
+         ""
+
+run_test "Test 20: All Plugins Chain" \
+         "echo -e 'Hello World\n<END>' | ./output/analyzer 10 uppercaser expander flipper rotator logger typewriter" \
+         "[logger] D   L   R   O   W   O   L   L   E   H\n[typewriter]  D   L   R   O   W   O   L   L   E   H\nPipeline shutdown complete" \
+         ""
+
+# --- Summary ---
 echo ""
-
-# Test 1: Missing arguments
-print_info "Test 1: Missing arguments (should show usage)"
-((TESTS_RUN++))
-OUTPUT=$(./output/analyzer 2>&1 || true) 
-if echo "$OUTPUT" | grep -q "Usage:"; then
-    print_pass "Test 1: Missing arguments handled correctly"
-else
-    print_fail "Test 1: Usage message not shown (Got: $OUTPUT)"
-fi
-
-# Test 2: Invalid queue size
-print_info "Test 2: Invalid queue size"
-((TESTS_RUN++))
-OUTPUT=$(echo "test" | ./output/analyzer -5 logger 2>&1 || true)
-if echo "$OUTPUT" | grep -q "positive integer\|Usage:"; then
-    print_pass "Test 2: Invalid queue size rejected"
-else
-    print_fail "Test 2: Invalid queue size not handled (Got: $OUTPUT)"
-fi
-
-# Test 3: Non-existent plugin
-print_info "Test 3: Non-existent plugin"
-((TESTS_RUN++))
-OUTPUT=$(echo "test" | ./output/analyzer 10 nonexistent 2>&1 || true)
-if echo "$OUTPUT" | grep -q "Failed to load\|Usage:"; then
-    print_pass "Test 3: Non-existent plugin handled"
-else
-    print_fail "Test 3: Non-existent plugin not handled (Got: $OUTPUT)"
-fi
-
-echo ""
-
-# Test 4: Single plugin - logger
-print_info "Test 4: Logger plugin"
-((TESTS_RUN++))
-EXPECTED="[logger] hello"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 4: Logger plugin works"
-else
-    print_fail "Test 4: Logger plugin failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 5: Uppercaser plugin
-print_info "Test 5: Uppercaser plugin"
-((TESTS_RUN++))
-EXPECTED="[logger] HELLO"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 uppercaser logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 5: Uppercaser plugin works"
-else
-    print_fail "Test 5: Uppercaser plugin failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 6: Rotator plugin
-print_info "Test 6: Rotator plugin"
-((TESTS_RUN++))
-EXPECTED="[logger] OHELL"
-ACTUAL=$(echo -e "HELLO\n<END>" | ./output/analyzer 10 rotator logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 6: Rotator plugin works"
-else
-    print_fail "Test 6: Rotator plugin failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 7: Flipper plugin
-print_info "Test 7: Flipper plugin"
-((TESTS_RUN++))
-EXPECTED="[logger] OLLEH"
-ACTUAL=$(echo -e "HELLO\n<END>" | ./output/analyzer 10 flipper logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 7: Flipper plugin works"
-else
-    print_fail "Test 7: Flipper plugin failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 8: Expander plugin
-print_info "Test 8: Expander plugin"
-((TESTS_RUN++))
-EXPECTED="[logger] h e l l o"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 expander logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 8: Expander plugin works"
-else
-    print_fail "Test 8: Expander plugin failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 9: Pipeline chain - uppercaser -> rotator -> logger
-print_info "Test 9: Pipeline chain (uppercaser -> rotator -> logger)"
-((TESTS_RUN++))
-EXPECTED="[logger] OHELL"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 uppercaser rotator logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 9: Pipeline chain works"
-else
-    print_fail "Test 9: Pipeline chain failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 10: Multiple strings
-print_info "Test 10: Multiple strings in pipeline"
-((TESTS_RUN++))
-ACTUAL=$(echo -e "hello\nworld\n<END>" | ./output/analyzer 10 logger 2>/dev/null | wc -l)
-# Should have 2 log lines + 1 shutdown message = 3 lines. Testing for >= 2 lines.
-if [ "$ACTUAL" -ge 2 ]; then
-    print_pass "Test 10: Multiple strings processed"
-else
-    print_fail "Test 10: Multiple strings not processed correctly"
-fi
-
-# Test 11: Empty string
-print_info "Test 11: Empty string handling"
-((TESTS_RUN++))
-ACTUAL=$(echo -e "\n<END>" | ./output/analyzer 10 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ ! -z "$ACTUAL" ]; then
-    print_pass "Test 11: Empty string handled"
-else
-    print_fail "Test 11: Empty string not handled (Expected a log message, got none)"
-fi
-
-# Test 12: Special characters
-print_info "Test 12: Special characters"
-((TESTS_RUN++))
-EXPECTED="[logger] hello@world!"
-ACTUAL=$(echo -e "hello@world!\n<END>" | ./output/analyzer 10 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 12: Special characters handled"
-else
-    print_fail "Test 12: Special characters failed"
-fi
-
-# Test 13: Reusing plugin in chain
-print_info "Test 13: Plugin reused multiple times (uppercaser twice)"
-((TESTS_RUN++))
-EXPECTED="[logger] HELLO"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 uppercaser uppercaser logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 13: Plugin reuse works"
-else
-    print_fail "Test 13: Plugin reuse failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 14: Large queue size
-print_info "Test 14: Large queue size"
-((TESTS_RUN++))
-EXPECTED="[logger] hello"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 1000 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 14: Large queue size works"
-else
-    print_fail "Test 14: Large queue size failed"
-fi
-
-# Test 15: Queue size 1 (edge case)
-print_info "Test 15: Queue size 1 (edge case)"
-((TESTS_RUN++))
-EXPECTED="[logger] hello"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 1 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 15: Queue size 1 works"
-else
-    print_fail "Test 15: Queue size 1 failed"
-fi
-
-# Test 16: Shutdown message
-print_info "Test 16: Pipeline shutdown complete message"
-((TESTS_RUN++))
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 logger 2>/dev/null | grep "Pipeline shutdown complete" || true)
-if [ ! -z "$ACTUAL" ]; then
-    print_pass "Test 16: Shutdown message present"
-else
-    print_fail "Test 16: Shutdown message missing"
-fi
-
-# Test 17: Complex pipeline - all plugins (uppercaser -> rotator -> flipper -> expander -> logger)
-print_info "Test 17: Complex pipeline with multiple plugins"
-((TESTS_RUN++))
-ACTUAL=$(echo -e "hi\n<END>" | ./output/analyzer 10 uppercaser rotator flipper expander logger 2>/dev/null | grep "\[logger\]" || true)
-if [ ! -z "$ACTUAL" ]; then
-    print_pass "Test 17: Complex pipeline works"
-else
-    print_fail "Test 17: Complex pipeline failed"
-fi
-
-# Test 18: Flipper on rotated string
-print_info "Test 18: Flipper on rotated string"
-((TESTS_RUN++))
-EXPECTED="[logger] ELLOH"
-ACTUAL=$(echo -e "HELLO\n<END>" | ./output/analyzer 10 rotator flipper logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 18: Flipper on rotated string works"
-else
-    print_fail "Test 18: Flipper on rotated string failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 19: Logger appears in middle of pipeline
-print_info "Test 19: Logger in middle of pipeline"
-((TESTS_RUN++))
-EXPECTED="[logger] HELLO"
-ACTUAL=$(echo -e "hello\n<END>" | ./output/analyzer 10 uppercaser logger flipper 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 19: Logger in middle of pipeline works"
-else
-    print_fail "Test 19: Logger in middle of pipeline failed (Expected: '$EXPECTED', Got: '$ACTUAL')"
-fi
-
-# Test 20: Long string
-print_info "Test 20: Long string handling"
-((TESTS_RUN++))
-LONG_STRING="thequickbrownfoxjumpsoverthelazydog"
-EXPECTED="[logger] $LONG_STRING"
-ACTUAL=$(echo -e "$LONG_STRING\n<END>" | ./output/analyzer 10 logger 2>/dev/null | grep "\[logger\]" || true)
-if [ "$ACTUAL" = "$EXPECTED" ]; then
-    print_pass "Test 20: Long string handled"
-else
-    print_fail "Test 20: Long string failed"
-fi
-
-echo ""
-echo "========================================="
-echo "Test Results:"
-echo "========================================="
-printf "Total Tests Run: %d\n" "$TESTS_RUN"
-printf "Tests Passed: ${GREEN}%d${NC}\n" "$TESTS_PASSED"
-printf "Tests Failed: ${RED}%d${NC}\n" $((TESTS_RUN - TESTS_PASSED))
-echo "========================================="
-
-if [ "$TESTS_PASSED" -eq "$TESTS_RUN" ]; then
-    echo -e "${GREEN}ALL TESTS PASSED!${NC}"
+echo "--- Test Summary ---"
+if [ $FAIL_COUNT -eq 0 ]; then
+    echo -e "${GREEN}All $TEST_COUNT tests passed!${NC}"
     exit 0
 else
-    echo -e "${RED}SOME TESTS FAILED!${NC}"
+    echo -e "${RED}$FAIL_COUNT / $TEST_COUNT tests failed.${NC}"
     exit 1
 fi
+
