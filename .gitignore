@@ -10,6 +10,7 @@
 # Ignore build directories (if you use one)
 build/
 bin/
+output/
 
 # Ignore VS Code settings (optional)
 .vscode/
