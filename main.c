@@ -225,7 +225,12 @@ int main(int argc, char* argv[]) {
 
     while (fgets(line, sizeof(line), stdin)) {
         line[strcspn(line, "\n")] = '\0';
-        plugins[0].place_work(line);
+        const char* err = plugins[0].place_work(line);
+        if (err) {
+            fprintf(stderr, "Error sending work to first plugin: %s\n", err);
+            cleanup_plugins(plugins, num_plugins, plugin_names);
+            exit(1);
+        }
         
         if (strcmp(line, "<END>") == 0) {
             sent_end = 1;
@@ -235,12 +240,20 @@ int main(int argc, char* argv[]) {
 
     /* If EOF reached before <END>, send it now */
     if (!sent_end) {
-        plugins[0].place_work("<END>");
+        const char* err = plugins[0].place_work("<END>");
+        if (err) {
+            fprintf(stderr, "Error sending <END> to first plugin: %s\n", err);
+            cleanup_plugins(plugins, num_plugins, plugin_names);
+            exit(1);
+        }
     }
     
     /* Wait for all plugins to finish */
     for (int i = 0; i < num_plugins; i++) {
-        plugins[i].wait_finished();
+        const char* err = plugins[i].wait_finished();
+        if (err) {
+            fprintf(stderr, "Error waiting for plugin %s to finish: %s\n", plugins[i].name, err);
+        }
     }
     
     /* Cleanup */
