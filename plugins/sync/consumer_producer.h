@@ -16,12 +16,8 @@ typedef struct
  	int head; 				/* */
  	int tail; 				/* */
 
- 	/* We use a single mutex and standard CVs for the queue's producer/consumer logic */
- 	pthread_mutex_t mutex;
- 	pthread_cond_t not_full;
- 	pthread_cond_t not_empty;
-
- 	/* We use the stateful monitor for the 'finished' signal */
+ 	monitor_t not_full_monitor;
+    monitor_t not_empty_monitor;
  	monitor_t finished_monitor; /* */
  	
 } consumer_producer_t; /* */

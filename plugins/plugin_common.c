@@ -1,146 +1,143 @@
-/* */
 #include "plugin_common.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Use a single global context for this plugin instance (.so file) */
+/* Global context for this plugin (.so file) */
 static plugin_context_t g_context;
 
-void log_error(plugin_context_t* context, const char* message) { /* */
-    /* Errors must be written to STDERR */
-    fprintf(stderr, "[ERROR] [%s] %s\n", context->name, message); /* */
+/* Write error message to stderr */
+void log_error(plugin_context_t* context, const char* message) {
+    fprintf(stderr, "[ERROR] [%s] %s\n", context->name, message);
 }
 
-void log_info(plugin_context_t* context, const char* message) { /* */
-    /* Per instructions, non-error logs should not go to STDOUT. */
-    /* We can write to stderr for debugging or disable them. */
-    // fprintf(stderr, "[INFO] [%s] %s\n", context->name, message); /* */
+/* Log info message (disabled to keep stdout clean) */
+void log_info(plugin_context_t* context, const char* message) {
+    (void)context;
+    (void)message;
+    /* Disabled per assignment requirements */
 }
 
-void* plugin_consumer_thread(void* arg) { /* */
-    plugin_context_t* context = (plugin_context_t*)arg; /* */
+/* Worker thread: processes items from queue */
+void* plugin_consumer_thread(void* arg) {
+    plugin_context_t* context = (plugin_context_t*)arg;
     
     while (1) {
-        /* Get work from the queue (blocks if empty) */
-        char* input_str = consumer_producer_get(context->queue); 
+        /* Get next item from queue (blocks if empty) */
+        char* input_str = consumer_producer_get(context->queue);
         
-        /* Check for the shutdown signal */
+        /* Check if this is the shutdown signal */
         if (strcmp(input_str, "<END>") == 0) {
-            
-            /* * FIX: Signal that this plugin is finished *immediately*.
-             * This unblocks the main thread's wait_finished() call.
-             * We must do this *before* trying to place <END> in the next
-             * queue, which might block and cause a deadlock (as seen in Test 15).
-             */
+            /* Signal finished BEFORE forwarding <END> to avoid deadlock */
             consumer_producer_signal_finished(context->queue);
-
-            /* If there's a next plugin, forward the <END> signal */
-            if (context->next_place_work) { /* */
+            
+            /* Forward <END> to next plugin if it exists */
+            if (context->next_place_work) {
                 context->next_place_work(input_str);
             }
             
-            free(input_str); /* Free the <END> string */
-            break; /* Exit the thread loop */
+            free(input_str);
+            break;
         }
         
-        /* Process the string using the plugin-specific function */
-        const char* processed_str = context->process_function(input_str);
-        
-        /* The original input string is no longer needed */
+        /* Apply plugin-specific transformation */
+        const char* output_str = context->process_function(input_str);
         free(input_str);
         
-        if (context->next_place_work) { /* */
-            /* Pass the result to the next plugin */
-            context->next_place_work(processed_str);
-            
-            /* The next plugin's queue (put) will strdup it, so we free our copy */
-            free((void*)processed_str);
+        if (context->next_place_work) {
+            /* Send to next plugin in chain */
+            context->next_place_work(output_str);
+            free((void*)output_str);
         } else {
-            /* This is the last plugin in the chain. It must free the final string. */
-            free((void*)processed_str);
+            /* Last plugin - free the output */
+            free((void*)output_str);
         }
     }
     
-    return NULL; /* */
+    return NULL;
 }
 
-const char* common_plugin_init(const char* (*process_function) (const char*), /* */
-                              const char* name, int queue_size) { /* */
+/* Initialize plugin with transformation function and queue size */
+const char* common_plugin_init(const char* (*process_function)(const char*),
+                              const char* name, int queue_size) {
     
-    g_context.name = name; /* */
-    g_context.process_function = process_function; /* */
-    g_context.next_place_work = NULL; /* */
-    g_context.initialized = 0; /* */
-    g_context.finished = 0; /* */
+    /* Set up context */
+    g_context.name = name;
+    g_context.process_function = process_function;
+    g_context.next_place_work = NULL;
+    g_context.initialized = 0;
+    g_context.finished = 0;
     
-    g_context.queue = malloc(sizeof(consumer_producer_t)); /* */
+    /* Create queue */
+    g_context.queue = malloc(sizeof(consumer_producer_t));
     if (!g_context.queue) {
-        return "Failed to allocate memory for plugin queue.";
+        return "Failed to allocate memory for queue";
     }
     
-    /* Initialize the queue */
-    const char* err = consumer_producer_init(g_context.queue, queue_size); /* */
+    const char* err = consumer_producer_init(g_context.queue, queue_size);
     if (err) {
         free(g_context.queue);
         return err;
     }
     
-    /* Launch the worker thread */
-    if (pthread_create(&g_context.consumer_thread, NULL, plugin_consumer_thread, &g_context) != 0) {
+    /* Create worker thread */
+    if (pthread_create(&g_context.consumer_thread, NULL, 
+                      plugin_consumer_thread, &g_context) != 0) {
         consumer_producer_destroy(g_context.queue);
         free(g_context.queue);
-        return "Failed to create plugin consumer thread.";
+        return "Failed to create worker thread";
     }
     
-    g_context.initialized = 1; /* */
-    return NULL; /* */
+    g_context.initialized = 1;
+    return NULL;
 }
 
-/* --- Default Interface Implementations --- */
+/* ===== Plugin Interface Functions ===== */
 
-const char* plugin_get_name(void) { /* */
-    return g_context.name; /* */
+/* Return plugin name */
+__attribute__((visibility("default")))
+const char* plugin_get_name(void) {
+    return g_context.name;
 }
 
-const char* plugin_fini(void) { /* */
-    if (!g_context.initialized) { /* */
+/* Cleanup: wait for thread and free resources */
+__attribute__((visibility("default")))
+const char* plugin_fini(void) {
+    if (!g_context.initialized) {
         return NULL;
     }
     
-    /* Wait for the consumer thread to exit */
-    pthread_join(g_context.consumer_thread, NULL); /* */
-    
-    /* Clean up queue resources */
+    pthread_join(g_context.consumer_thread, NULL);
     consumer_producer_destroy(g_context.queue);
-    free(g_context.queue); /* */
+    free(g_context.queue);
     
     g_context.initialized = 0;
-    return NULL; /* */
+    return NULL;
 }
 
-const char* plugin_place_work(const char* str) { /* */
+/* Add work to plugin's queue */
+__attribute__((visibility("default")))
+const char* plugin_place_work(const char* str) {
     if (!g_context.initialized) {
-        return "Plugin not initialized.";
+        return "Plugin not initialized";
     }
-    /* Place the string into this plugin's input queue */
-    return consumer_producer_put(g_context.queue, str); /* */
+    return consumer_producer_put(g_context.queue, str);
 }
 
-void plugin_attach(const char* (*next_place_work) (const char*)) { /* */
-    /* Store the function pointer to the next plugin's place_work */
-    g_context.next_place_work = next_place_work; /* */
+/* Connect to next plugin in chain */
+__attribute__((visibility("default")))
+void plugin_attach(const char* (*next_place_work)(const char*)) {
+    g_context.next_place_work = next_place_work;
 }
 
-const char* plugin_wait_finished(void) { /* */
+/* Wait for plugin to finish processing */
+__attribute__((visibility("default")))
+const char* plugin_wait_finished(void) {
     if (!g_context.initialized) {
-        return "Plugin not initialized.";
+        return "Plugin not initialized";
     }
     
-    /* Block until the consumer thread signals it's finished */
     consumer_producer_wait_finished(g_context.queue);
-    
-    g_context.finished = 1; /* */
-    return NULL; /* */
+    g_context.finished = 1;
+    return NULL;
 }
-
