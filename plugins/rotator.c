@@ -18,8 +18,16 @@ const char* plugin_transform(const char* input) {
         return NULL;
     }
     
-    new_str[0] = input[len - 1]; /* */
-    memcpy(new_str + 1, input, len - 1); /* */
+    /* Place the last character at the front */
+    new_str[0] = input[len - 1];
+    
+    /*
+     * Copy (len - 1) bytes from the original string.
+     * This copies input[0] through input[len-2].
+     */
+    memcpy(new_str + 1, input, len - 1);
+    
+    /* Add the new null terminator at the end */
     new_str[len] = '\0';
     
     return new_str;
@@ -28,6 +36,7 @@ const char* plugin_transform(const char* input) {
 /**
  * Initialization function for the rotator plugin.
  */
-const char* plugin_init(int queue_size) { /* */
-    return common_plugin_init(plugin_transform, "rotator", queue_size); /* */
+const char* plugin_init(int queue_size) {
+    return common_plugin_init(plugin_transform, "rotator", queue_size);
 }
+

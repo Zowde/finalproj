@@ -1,5 +1,8 @@
 /* */
 #include "plugin_common.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 /* Use a single global context for this plugin instance (.so file) */
 static plugin_context_t g_context;
@@ -24,13 +27,19 @@ void* plugin_consumer_thread(void* arg) { /* */
         
         /* Check for the shutdown signal */
         if (strcmp(input_str, "<END>") == 0) {
+            
+            /* * FIX: Signal that this plugin is finished *immediately*.
+             * This unblocks the main thread's wait_finished() call.
+             * We must do this *before* trying to place <END> in the next
+             * queue, which might block and cause a deadlock (as seen in Test 15).
+             */
+            consumer_producer_signal_finished(context->queue);
+
             /* If there's a next plugin, forward the <END> signal */
             if (context->next_place_work) { /* */
                 context->next_place_work(input_str);
             }
             
-            /* Signal that this plugin has finished processing */
-            consumer_producer_signal_finished(context->queue);
             free(input_str); /* Free the <END> string */
             break; /* Exit the thread loop */
         }
@@ -57,7 +66,7 @@ void* plugin_consumer_thread(void* arg) { /* */
 }
 
 const char* common_plugin_init(const char* (*process_function) (const char*), /* */
-                             const char* name, int queue_size) { /* */
+                              const char* name, int queue_size) { /* */
     
     g_context.name = name; /* */
     g_context.process_function = process_function; /* */
@@ -134,3 +143,4 @@ const char* plugin_wait_finished(void) { /* */
     g_context.finished = 1; /* */
     return NULL; /* */
 }
+
