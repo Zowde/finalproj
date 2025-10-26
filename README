@@ -1,0 +1,39 @@
+## Project Description
+
+This is a Modular Multithreaded String Analyzer Pipeline implemented in C for an Operating Systems course at Reichman University.
+
+## Overview
+
+A plugin-based system that processes input lines from STDIN through a chain of transformation plugins. Each plugin runs in its own thread and communicates with the next plugin via thread-safe bounded queues.
+
+## Features
+
+- Dynamic plugin loading (.so files)
+- Multithreaded architecture with proper synchronization
+- Thread-safe producer-consumer queues
+- 6 built-in plugins: logger, uppercaser, rotator, flipper, expander, typewriter
+- Graceful shutdown handling
+- Support for repeated plugin usage
+
+## Building
+```bash
+./build.sh
+```
+
+## Running
+```bash
+echo "hello world" | ./output/analyzer 20 uppercaser rotator logger
+```
+
+## Testing
+```bash
+./test.sh
+```
+
+## Project Structure
+
+- `main.c` - Main application
+- `plugins/` - Plugin implementations
+- `plugins/sync/` - Synchronization utilities (monitor, consumer-producer queue)
+- `build.sh` - Build script
+- `test.sh` - Test suite
